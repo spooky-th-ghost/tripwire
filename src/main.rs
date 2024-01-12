@@ -15,8 +15,8 @@ fn main() {
             ..default()
         })
         .register_type::<GroundSensor>()
-        .register_type::<StakeInfo>()
-        .insert_resource(StakeInfo::default())
+        .register_type::<WireInfo>()
+        .insert_resource(WireInfo::default())
         .add_event::<NewSegmentEvent>()
         .add_systems(Startup, setup)
         .add_systems(
@@ -24,7 +24,7 @@ fn main() {
             (
                 (
                     deploy_stake,
-                    update_stake_info,
+                    update_wire_info,
                     move_player,
                     handle_ground_sensor,
                     (handle_wire_length, create_segments).chain(),
@@ -38,28 +38,67 @@ fn main() {
 
 #[derive(Event)]
 pub struct NewSegmentEvent {
-    stake_position: Vec3,
+    primary_position: Vec3,
+    primary_entity: Entity,
     target_position: Vec3,
-    stake_entity: Entity,
-    segment_entity: Entity,
+    target_entity: Entity,
 }
 
 #[derive(Resource, Reflect)]
 #[reflect(Resource)]
-pub struct StakeInfo {
+pub struct WireInfo {
     deployed: bool,
     deployed_segments: usize,
     max_segments: usize,
     distance_to_target: f32,
+    distance_threshold: f32,
 }
 
-impl Default for StakeInfo {
+impl WireInfo {
+    pub fn should_extend(&self) -> bool {
+        self.distance_to_target > self.distance_threshold
+            && self.deployed_segments < self.max_segments
+    }
+}
+
+impl Default for WireInfo {
     fn default() -> Self {
-        StakeInfo {
+        WireInfo {
             deployed: false,
             deployed_segments: 0,
             max_segments: 10,
             distance_to_target: 0.0,
+            distance_threshold: 0.25,
+        }
+    }
+}
+
+#[derive(Bundle)]
+pub struct SegmentBundle {
+    transform: TransformBundle,
+    collider: Collider,
+    rigidbody: RigidBody,
+    impulse_joint: ImpulseJoint,
+    segment: Segment,
+    name: Name,
+    gravity_scale: GravityScale,
+    sensor: Sensor,
+}
+
+impl SegmentBundle {
+    pub fn new(translation: Vec3, impulse_joint: ImpulseJoint) -> Self {
+        SegmentBundle {
+            transform: TransformBundle {
+                local: Transform::from_translation(translation),
+                ..default()
+            },
+            collider: Collider::ball(0.25),
+            rigidbody: RigidBody::Dynamic,
+            impulse_joint,
+            segment: Segment,
+            name: Name::from("Segment"),
+            gravity_scale: GravityScale(0.0),
+            sensor: Sensor,
         }
     }
 }
@@ -71,9 +110,13 @@ pub struct WireAssets {
 }
 
 #[derive(Component)]
-pub struct Stake {
-    target: Entity,
-}
+pub struct Stake;
+
+#[derive(Component)]
+pub struct WireTarget;
+
+#[derive(Component)]
+pub struct WirePrimary;
 
 #[derive(Component)]
 pub struct Segment;
@@ -188,18 +231,18 @@ fn handle_ground_sensor(
 fn deploy_stake(
     mut commands: Commands,
     input: Res<Input<KeyCode>>,
-    mut stake_info: ResMut<StakeInfo>,
+    mut wire_info: ResMut<WireInfo>,
     wire_assets: Res<WireAssets>,
     player_query: Query<(Entity, &Transform, &GroundSensor), With<Player>>,
 ) {
     if let Ok((entity, transform, sensor)) = player_query.get_single() {
-        if !stake_info.deployed && input.just_pressed(KeyCode::E) && sensor.grounded {
+        if !wire_info.deployed && input.just_pressed(KeyCode::E) && sensor.grounded {
             let stake_transform = Transform::from_xyz(
                 transform.translation.x,
                 sensor.ground_height + 0.5,
                 transform.translation.z,
             );
-            stake_info.deployed = true;
+            wire_info.deployed = true;
             commands.spawn((
                 SceneBundle {
                     transform: stake_transform,
@@ -207,45 +250,46 @@ fn deploy_stake(
                     ..default()
                 },
                 RigidBody::Fixed,
+                WirePrimary,
                 Collider::cuboid(0.25, 0.5, 0.25),
-                Stake { target: entity },
+                Stake,
                 Name::from("Stake"),
                 Sensor,
             ));
+
+            commands.entity(entity).insert(WireTarget);
         }
     }
 }
 
-fn update_stake_info(
-    mut stake_info: ResMut<StakeInfo>,
-    target_query: Query<&Transform, Or<(With<Player>, With<Segment>)>>,
-    stake_query: Query<(&Transform, &Stake)>,
+fn update_wire_info(
+    mut wire_info: ResMut<WireInfo>,
+    primary_query: Query<&Transform, With<WirePrimary>>,
+    target_query: Query<&Transform, With<WireTarget>>,
 ) {
-    if let Ok((stake_transform, stake)) = stake_query.get_single() {
-        if let Ok(target_transform) = target_query.get(stake.target) {
-            stake_info.distance_to_target = target_transform
+    if let Ok(primary_transform) = primary_query.get_single() {
+        if let Ok(target_transform) = target_query.get_single() {
+            wire_info.distance_to_target = target_transform
                 .translation
-                .distance(stake_transform.translation);
+                .distance(primary_transform.translation);
         }
     }
 }
 
 fn handle_wire_length(
     mut segment_events: EventWriter<NewSegmentEvent>,
-    stake_info: Res<StakeInfo>,
-    stake_query: Query<(Entity, &Transform, &Stake)>,
-    target_query: Query<(Entity, &Transform), Or<(With<Segment>, With<Player>)>>,
+    wire_info: Res<WireInfo>,
+    primary_query: Query<(Entity, &Transform), With<WirePrimary>>,
+    target_query: Query<(Entity, &Transform), With<WireTarget>>,
 ) {
-    if let Ok((stake_entity, stake_transform, stake)) = stake_query.get_single() {
-        if stake_info.distance_to_target >= 0.50
-            && stake_info.deployed_segments < stake_info.max_segments
-        {
-            if let Ok((target_entity, target_transform)) = target_query.get(stake.target) {
+    if let Ok((primary_entity, primary_transform)) = primary_query.get_single() {
+        if wire_info.should_extend() {
+            if let Ok((target_entity, target_transform)) = target_query.get_single() {
                 segment_events.send(NewSegmentEvent {
-                    stake_position: stake_transform.translation,
+                    primary_position: primary_transform.translation,
                     target_position: target_transform.translation,
-                    segment_entity: target_entity,
-                    stake_entity,
+                    target_entity,
+                    primary_entity,
                 });
             }
         }
@@ -254,55 +298,47 @@ fn handle_wire_length(
 
 fn create_segments(
     mut commands: Commands,
-    mut stake_info: ResMut<StakeInfo>,
+    mut wire_info: ResMut<WireInfo>,
     mut segment_events: EventReader<NewSegmentEvent>,
-    mut stake_query: Query<&mut Stake>,
 ) {
-    if let Ok(mut stake) = stake_query.get_single_mut() {
-        for event in segment_events.read() {
-            let NewSegmentEvent {
-                stake_position,
-                target_position,
-                stake_entity,
-                segment_entity,
-            } = event;
-            let joint_to_stake = RopeJointBuilder::new()
-                .local_anchor1(Vec3::Y * 0.75)
-                .local_anchor2(Vec3::ZERO)
-                .limits([0.0, 0.51]);
+    for event in segment_events.read() {
+        let NewSegmentEvent {
+            primary_position,
+            target_position,
+            primary_entity,
+            target_entity,
+        } = event;
+        let joint_to_primary = RopeJointBuilder::new()
+            .local_anchor1(Vec3::ZERO)
+            .local_anchor2(Vec3::ZERO)
+            .limits([0.0, 0.51]);
 
-            let joint_to_segment = RopeJointBuilder::new()
-                .local_anchor1(Vec3::ZERO)
-                .local_anchor2(Vec3::ZERO)
-                .limits([0.0, 0.51])
-                .build();
+        let joint_to_target = RopeJointBuilder::new()
+            .local_anchor1(Vec3::ZERO)
+            .local_anchor2(Vec3::ZERO)
+            .limits([0.0, 0.51])
+            .build();
 
-            let new_transform =
-                Transform::from_translation(stake_position.lerp(*target_position, 0.5));
+        let new_position = primary_position.lerp(*target_position, 0.5);
 
-            let new_entity = commands
-                .spawn((
-                    TransformBundle {
-                        local: new_transform,
-                        ..default()
-                    },
-                    Segment,
-                    RigidBody::Dynamic,
-                    Collider::ball(0.125),
-                    Sensor,
-                    Name::from("Segment"),
-                    ImpulseJoint::new(*stake_entity, joint_to_stake),
-                ))
-                .id();
+        let new_entity = commands
+            .spawn((
+                SegmentBundle::new(
+                    new_position,
+                    ImpulseJoint::new(*target_entity, joint_to_target),
+                ),
+                WirePrimary,
+            ))
+            .id();
 
-            commands
-                .entity(*segment_entity)
-                .remove::<Sensor>()
-                .remove::<ImpulseJoint>()
-                .insert(ImpulseJoint::new(new_entity, joint_to_segment));
+        commands
+            .entity(*primary_entity)
+            .remove::<Sensor>()
+            .remove::<ImpulseJoint>()
+            .remove::<GravityScale>()
+            .remove::<WirePrimary>()
+            .insert(ImpulseJoint::new(new_entity, joint_to_primary));
 
-            stake.target = new_entity;
-            stake_info.deployed_segments += 1;
-        }
+        wire_info.deployed_segments += 1;
     }
 }
