@@ -24,7 +24,6 @@ fn main() {
             (
                 (
                     deploy_stake,
-                    update_wire_info,
                     move_player,
                     handle_ground_sensor,
                     (handle_wire_length, create_segments).chain(),
@@ -52,12 +51,26 @@ pub struct WireInfo {
     max_segments: usize,
     distance_to_target: f32,
     distance_threshold: f32,
+    primary_entity: Option<Entity>,
+    target_entity: Option<Entity>,
+    spawn_timer: Timer,
 }
 
 impl WireInfo {
     pub fn should_extend(&self) -> bool {
         self.distance_to_target > self.distance_threshold
             && self.deployed_segments < self.max_segments
+            && self.primary_entity.is_some()
+            && self.target_entity.is_some()
+            && self.spawn_timer.finished()
+    }
+
+    pub fn tick(&mut self, delta: std::time::Duration) {
+        self.spawn_timer.tick(delta);
+    }
+
+    pub fn reset_timer(&mut self) {
+        self.spawn_timer = Timer::from_seconds(0.2, TimerMode::Once);
     }
 }
 
@@ -69,6 +82,9 @@ impl Default for WireInfo {
             max_segments: 10,
             distance_to_target: 0.0,
             distance_threshold: 0.25,
+            primary_entity: None,
+            target_entity: None,
+            spawn_timer: Timer::from_seconds(0.2, TimerMode::Once),
         }
     }
 }
@@ -81,8 +97,6 @@ pub struct SegmentBundle {
     impulse_joint: ImpulseJoint,
     segment: Segment,
     name: Name,
-    gravity_scale: GravityScale,
-    sensor: Sensor,
 }
 
 impl SegmentBundle {
@@ -92,13 +106,11 @@ impl SegmentBundle {
                 local: Transform::from_translation(translation),
                 ..default()
             },
-            collider: Collider::ball(0.25),
+            collider: Collider::capsule_x(0.4, 0.15),
             rigidbody: RigidBody::Dynamic,
             impulse_joint,
             segment: Segment,
             name: Name::from("Segment"),
-            gravity_scale: GravityScale(0.0),
-            sensor: Sensor,
         }
     }
 }
@@ -150,34 +162,78 @@ fn setup(
     commands.spawn((
         PbrBundle {
             transform: Transform::from_translation(Vec3::NEG_Y * 4.0),
-            mesh: meshes.add(shape::Box::new(20.0, 0.5, 20.0).into()),
+            mesh: meshes.add(shape::Box::new(200.0, 4.0, 200.0).into()),
             material: materials.add(Color::GOLD.into()),
             ..default()
         },
-        Collider::cuboid(10.0, 0.25, 10.0),
+        Collider::cuboid(100.0, 2.0, 100.0),
         RigidBody::Fixed,
     ));
 
+    let mut next_entity = commands
+        .spawn((
+            PbrBundle {
+                mesh: meshes.add(
+                    shape::Capsule {
+                        radius: 0.5,
+                        depth: 1.0,
+                        rings: 4,
+                        ..default()
+                    }
+                    .into(),
+                ),
+                material: materials.add(Color::BLUE.into()),
+                ..default()
+            },
+            Player,
+            LockedAxes::ROTATION_LOCKED,
+            RigidBody::Dynamic,
+            Velocity::default(),
+            Collider::capsule_y(0.5, 0.5),
+            GroundSensor::default(),
+        ))
+        .id();
+
+    let mut joint = SphericalJointBuilder::new()
+        .local_anchor1(Vec3::X * 0.35)
+        .local_anchor2(Vec3::NEG_X * 0.35)
+        .build();
+
+    joint.set_contacts_enabled(false);
+
+    let starting_translation = Vec3::new(-4.0, -1.0, 4.0);
+
+    for i in 0..20 {
+        let translation = (0.3 * i as f32 * Vec3::X) + starting_translation;
+        next_entity = commands
+            .spawn((
+                SegmentBundle::new(translation, ImpulseJoint::new(next_entity, joint)),
+                Damping {
+                    linear_damping: 2.0,
+                    angular_damping: 3.0,
+                },
+            ))
+            .id();
+    }
+
+    let mut stake_joint = SphericalJointBuilder::new()
+        .local_anchor1(Vec3::X)
+        .local_anchor2(Vec3::ZERO)
+        .build();
+
+    stake_joint.set_contacts_enabled(false);
+
     commands.spawn((
-        PbrBundle {
-            mesh: meshes.add(
-                shape::Capsule {
-                    radius: 0.5,
-                    depth: 1.0,
-                    rings: 4,
-                    ..default()
-                }
-                .into(),
-            ),
-            material: materials.add(Color::BLUE.into()),
+        SceneBundle {
+            transform: Transform::from_xyz(5.0, -1.5, 4.0),
+            scene: asset_server.load("stake.glb#Scene0"),
             ..default()
         },
-        Player,
-        LockedAxes::ROTATION_LOCKED,
-        RigidBody::Dynamic,
-        Velocity::default(),
-        Collider::capsule_y(0.5, 0.5),
-        GroundSensor::default(),
+        RigidBody::Fixed,
+        Collider::cuboid(0.25, 0.5, 0.25),
+        Stake,
+        Name::from("Stake"),
+        ImpulseJoint::new(next_entity, stake_joint),
     ));
 }
 
@@ -233,9 +289,9 @@ fn deploy_stake(
     input: Res<Input<KeyCode>>,
     mut wire_info: ResMut<WireInfo>,
     wire_assets: Res<WireAssets>,
-    player_query: Query<(Entity, &Transform, &GroundSensor), With<Player>>,
+    query: Query<(Entity, &Transform, &GroundSensor), With<Player>>,
 ) {
-    if let Ok((entity, transform, sensor)) = player_query.get_single() {
+    if let Ok((entity, transform, sensor)) = query.get_single() {
         if !wire_info.deployed && input.just_pressed(KeyCode::E) && sensor.grounded {
             let stake_transform = Transform::from_xyz(
                 transform.translation.x,
@@ -243,54 +299,61 @@ fn deploy_stake(
                 transform.translation.z,
             );
             wire_info.deployed = true;
-            commands.spawn((
-                SceneBundle {
-                    transform: stake_transform,
-                    scene: wire_assets.stake.clone(),
-                    ..default()
-                },
-                RigidBody::Fixed,
-                WirePrimary,
-                Collider::cuboid(0.25, 0.5, 0.25),
-                Stake,
-                Name::from("Stake"),
-                Sensor,
-            ));
+            let stake_entity = commands
+                .spawn((
+                    SceneBundle {
+                        transform: stake_transform,
+                        scene: wire_assets.stake.clone(),
+                        ..default()
+                    },
+                    RigidBody::Fixed,
+                    WirePrimary,
+                    Collider::cuboid(0.25, 0.5, 0.25),
+                    Stake,
+                    Name::from("Stake"),
+                    Sensor,
+                ))
+                .id();
 
             commands.entity(entity).insert(WireTarget);
-        }
-    }
-}
-
-fn update_wire_info(
-    mut wire_info: ResMut<WireInfo>,
-    primary_query: Query<&Transform, With<WirePrimary>>,
-    target_query: Query<&Transform, With<WireTarget>>,
-) {
-    if let Ok(primary_transform) = primary_query.get_single() {
-        if let Ok(target_transform) = target_query.get_single() {
-            wire_info.distance_to_target = target_transform
-                .translation
-                .distance(primary_transform.translation);
+            wire_info.primary_entity = Some(stake_entity);
+            wire_info.target_entity = Some(entity);
         }
     }
 }
 
 fn handle_wire_length(
+    time: Res<Time>,
     mut segment_events: EventWriter<NewSegmentEvent>,
-    wire_info: Res<WireInfo>,
-    primary_query: Query<(Entity, &Transform), With<WirePrimary>>,
-    target_query: Query<(Entity, &Transform), With<WireTarget>>,
+    mut wire_info: ResMut<WireInfo>,
+    primary_query: Query<&Transform, With<WirePrimary>>,
+    target_query: Query<&Transform, With<WireTarget>>,
 ) {
-    if let Ok((primary_entity, primary_transform)) = primary_query.get_single() {
-        if wire_info.should_extend() {
-            if let Ok((target_entity, target_transform)) = target_query.get_single() {
-                segment_events.send(NewSegmentEvent {
-                    primary_position: primary_transform.translation,
-                    target_position: target_transform.translation,
-                    target_entity,
-                    primary_entity,
-                });
+    wire_info.tick(time.delta());
+    if let (Some(primary_entity), Some(target_entity)) =
+        (wire_info.primary_entity, wire_info.target_entity)
+    {
+        println!("Starting length loop");
+        if let Ok(primary_transform) = primary_query.get(primary_entity) {
+            if let Ok(target_transform) = target_query.get(target_entity) {
+                wire_info.distance_to_target = target_transform
+                    .translation
+                    .distance(primary_transform.translation);
+
+                if wire_info.should_extend() {
+                    segment_events.send(NewSegmentEvent {
+                        primary_position: primary_transform.translation,
+                        target_position: target_transform.translation,
+                        target_entity,
+                        primary_entity,
+                    });
+                    println!(
+                        "Sending event\nprimary: {:?}\ntarget: {:?}",
+                        primary_entity, target_entity
+                    );
+                    wire_info.primary_entity = None;
+                    wire_info.reset_timer();
+                }
             }
         }
     }
@@ -308,6 +371,7 @@ fn create_segments(
             primary_entity,
             target_entity,
         } = event;
+
         let joint_to_primary = RopeJointBuilder::new()
             .local_anchor1(Vec3::ZERO)
             .local_anchor2(Vec3::ZERO)
@@ -330,6 +394,7 @@ fn create_segments(
                 WirePrimary,
             ))
             .id();
+        wire_info.primary_entity = Some(new_entity);
 
         commands
             .entity(*primary_entity)
