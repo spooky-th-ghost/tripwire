@@ -1,71 +1,73 @@
 use bevy::prelude::*;
 use bevy_xpbd_3d::prelude::*;
+use victimless_physics::prelude::ColLayer;
 
 pub struct ChainPlugin;
 
 impl Plugin for ChainPlugin {
     fn build(&self, app: &mut App) {
-        app.register_type::<WireInfo>()
-            .insert_resource(WireInfo::default())
-            .add_event::<NewSegmentEvent>();
+        app.register_type::<ChainInfo>()
+            .insert_resource(ChainInfo::default())
+            .add_systems(Update, (handle_chain_info, extend_chain, deploy_stake));
     }
-}
-
-fn segment_translation(i: usize) -> Vec3 {
-    let starting_translation = Vec3::new(-4.0, -1.0, 4.0);
-    (0.3 * i as f32 * Vec3::X) + starting_translation
-}
-
-#[derive(Event)]
-pub struct NewSegmentEvent {
-    primary_position: Vec3,
-    primary_entity: Entity,
-    target_position: Vec3,
-    target_entity: Entity,
 }
 
 #[derive(Resource, Reflect)]
 #[reflect(Resource)]
-pub struct WireInfo {
+pub struct ChainInfo {
     deployed: bool,
+    locked: bool,
     deployed_segments: usize,
     max_segments: usize,
     distance_to_target: f32,
     distance_threshold: f32,
+    rest_length: f32,
+    max_distance: f32,
+    final_joint_entity: Option<Entity>,
+    stake_entity: Option<Entity>,
     primary_entity: Option<Entity>,
     target_entity: Option<Entity>,
-    spawn_timer: Timer,
 }
 
-impl WireInfo {
+impl ChainInfo {
     pub fn should_extend(&self) -> bool {
         self.distance_to_target > self.distance_threshold
             && self.deployed_segments < self.max_segments
+            && self.stake_entity.is_some()
             && self.primary_entity.is_some()
             && self.target_entity.is_some()
-            && self.spawn_timer.finished()
+            && self.deployed
+            && !self.locked
     }
 
-    pub fn tick(&mut self, delta: std::time::Duration) {
-        self.spawn_timer.tick(delta);
+    pub fn deploy_segment(&mut self, primary_entity: Entity, final_joint_entity: Entity) {
+        self.primary_entity = Some(primary_entity);
+        self.final_joint_entity = Some(final_joint_entity);
+        self.deployed_segments += 1;
     }
 
-    pub fn reset_timer(&mut self) {
-        self.spawn_timer = Timer::from_seconds(0.2, TimerMode::Once);
+    pub fn deploy_stake(&mut self, final_joint_entity: Entity) {
+        self.deployed = true;
+        self.deployed_segments = 0;
+        self.final_joint_entity = Some(final_joint_entity);
     }
 }
 
-impl Default for WireInfo {
+impl Default for ChainInfo {
     fn default() -> Self {
-        WireInfo {
+        ChainInfo {
             deployed: false,
+            locked: false,
             deployed_segments: 0,
             max_segments: 10,
             distance_to_target: 0.0,
             distance_threshold: 0.25,
+            rest_length: 1.0,
+            max_distance: 20.0,
+            final_joint_entity: None,
+            stake_entity: None,
             primary_entity: None,
             target_entity: None,
-            spawn_timer: Timer::from_seconds(0.2, TimerMode::Once),
         }
     }
 }
@@ -73,32 +75,121 @@ impl Default for WireInfo {
 #[derive(Resource)]
 pub struct WireAssets {
     pub stake: Handle<Scene>,
-    pub segment: Handle<Scene>,
 }
 
 #[derive(Component)]
 pub struct Stake;
 
 #[derive(Component)]
-pub struct WireTarget;
+pub struct ChainPrimary;
 
 #[derive(Component)]
-pub struct WirePrimary;
+pub struct ChainTarget;
+
+#[derive(Component)]
+pub struct FinalJoint;
+
+#[derive(Component)]
+pub struct TetherJoint;
 
 #[derive(Component)]
 pub struct Segment;
 
+fn handle_chain_info(
+    mut chain_info: ResMut<ChainInfo>,
+    primary_query: Query<&Transform, With<ChainPrimary>>,
+    target_query: Query<&Transform, With<ChainTarget>>,
+) {
+    if let Ok(primary_transform) = primary_query.get_single() {
+        if let Ok(target_transform) = target_query.get_single() {
+            chain_info.distance_to_target = primary_transform
+                .translation
+                .distance(target_transform.translation);
+        }
+    }
+}
+
+fn extend_chain(
+    mut commands: Commands,
+    mut chain_info: ResMut<ChainInfo>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut final_joint_query: Query<(Entity, &mut DistanceJoint), With<FinalJoint>>,
+    primary_query: Query<(Entity, &Transform), (With<ChainPrimary>, Without<FinalJoint>)>,
+    target_query: Query<(Entity, &Transform), (With<ChainTarget>, Without<FinalJoint>)>,
+) {
+    if chain_info.should_extend() {
+        if let (
+            Ok((primary_entity, primary_transform)),
+            Ok((target_entity, target_transform)),
+            Ok((final_joint_entity, mut final_joint)),
+        ) = (
+            primary_query.get(chain_info.primary_entity.unwrap()),
+            target_query.get(chain_info.target_entity.unwrap()),
+            final_joint_query.get_mut(chain_info.final_joint_entity.unwrap()),
+        ) {
+            let spawn_offset = (target_transform.translation - primary_transform.translation)
+                .normalize_or_zero()
+                * chain_info.rest_length;
+
+            let spawn_translation = primary_transform.translation + spawn_offset;
+
+            let new_primary = commands
+                .spawn((
+                    PbrBundle {
+                        mesh: meshes.add(Capsule3d {
+                            radius: 0.125,
+                            half_length: 0.25,
+                        }),
+                        material: materials.add(Color::BLUE),
+                        transform: Transform::from_translation(spawn_translation)
+                            .with_rotation(Quat::from_axis_angle(Vec3::Z, 90.0_f32.to_radians())),
+                        ..default()
+                    },
+                    RigidBody::Dynamic,
+                    Collider::capsule(0.5, 0.125),
+                    Friction::new(1.0),
+                    CollisionLayers::new(
+                        ColLayer::PlayerWidget,
+                        [ColLayer::Terrain, ColLayer::Object],
+                    ),
+                    Segment,
+                    Name::from("Link"),
+                ))
+                .id();
+
+            commands.entity(primary_entity).remove::<ChainPrimary>();
+            commands.entity(final_joint_entity).remove::<FinalJoint>();
+
+            final_joint.entity2 = new_primary;
+
+            let new_final_joint_entity = commands
+                .spawn((
+                    DistanceJoint::new(new_primary, target_entity)
+                        .with_limits(0.3, 0.5)
+                        .with_local_anchor_1(Vec3::Y * 0.5)
+                        .with_local_anchor_2(Vec3::NEG_Y * 0.5)
+                        .with_compliance(0.0),
+                    FinalJoint,
+                ))
+                .id();
+
+            chain_info.deploy_segment(new_primary, new_final_joint_entity);
+        }
+    }
+}
+
 fn deploy_stake(
     mut commands: Commands,
     input: Res<ButtonInput<KeyCode>>,
-    mut wire_info: ResMut<WireInfo>,
+    mut chain_info: ResMut<ChainInfo>,
     wire_assets: Res<WireAssets>,
     query: Query<(Entity, &Transform), With<crate::player::Player>>,
 ) {
     if let Ok((entity, transform)) = query.get_single() {
-        if !wire_info.deployed && input.just_pressed(KeyCode::KeyE) {
+        if !chain_info.deployed && input.just_pressed(KeyCode::KeyE) {
             let stake_transform = Transform::from_translation(transform.translation);
-            wire_info.deployed = true;
+            chain_info.deployed = true;
             let stake_entity = commands
                 .spawn((
                     SceneBundle {
@@ -107,7 +198,7 @@ fn deploy_stake(
                         ..default()
                     },
                     RigidBody::Static,
-                    WirePrimary,
+                    ChainPrimary,
                     Collider::cuboid(0.25, 0.5, 0.25),
                     Stake,
                     Name::from("Stake"),
@@ -115,115 +206,33 @@ fn deploy_stake(
                 ))
                 .id();
 
-            commands.entity(entity).insert(WireTarget);
-            wire_info.primary_entity = Some(stake_entity);
-            wire_info.target_entity = Some(entity);
+            commands.entity(entity).insert(ChainTarget);
+            chain_info.primary_entity = Some(stake_entity);
+            chain_info.target_entity = Some(entity);
+
+            // Normal Segment Joint
+            let final_joint_entity = commands
+                .spawn((
+                    DistanceJoint::new(stake_entity, entity)
+                        .with_limits(0.0, 0.5)
+                        .with_local_anchor_1(Vec3::Y)
+                        .with_local_anchor_2(Vec3::X * 0.5)
+                        .with_compliance(0.001),
+                    FinalJoint,
+                ))
+                .id();
+
+            // Tether Joint
+            commands.spawn((
+                DistanceJoint::new(stake_entity, entity)
+                    .with_limits(0.0, chain_info.max_distance)
+                    .with_local_anchor_1(Vec3::Y)
+                    .with_local_anchor_2(Vec3::X * 0.5)
+                    .with_compliance(0.0),
+                TetherJoint,
+            ));
+
+            chain_info.deploy_stake(final_joint_entity);
         }
     }
 }
-
-fn handle_wire_length(
-    time: Res<Time>,
-    mut segment_events: EventWriter<NewSegmentEvent>,
-    mut wire_info: ResMut<WireInfo>,
-    primary_query: Query<&Transform, With<WirePrimary>>,
-    target_query: Query<&Transform, With<WireTarget>>,
-) {
-    wire_info.tick(time.delta());
-    if let (Some(primary_entity), Some(target_entity)) =
-        (wire_info.primary_entity, wire_info.target_entity)
-    {
-        println!("Starting length loop");
-        if let Ok(primary_transform) = primary_query.get(primary_entity) {
-            if let Ok(target_transform) = target_query.get(target_entity) {
-                wire_info.distance_to_target = target_transform
-                    .translation
-                    .distance(primary_transform.translation);
-
-                if wire_info.should_extend() {
-                    segment_events.send(NewSegmentEvent {
-                        primary_position: primary_transform.translation,
-                        target_position: target_transform.translation,
-                        target_entity,
-                        primary_entity,
-                    });
-                    println!(
-                        "Sending event\nprimary: {:?}\ntarget: {:?}",
-                        primary_entity, target_entity
-                    );
-                    wire_info.primary_entity = None;
-                    wire_info.reset_timer();
-                }
-            }
-        }
-    }
-}
-
-// let chain_iterations = 20;
-
-// for i in 0..chain_iterations {
-//     let previous_entity = next_entity;
-//     let translation = segment_translation(i);
-//     next_entity = commands
-//         .spawn((
-//             PbrBundle {
-//                 mesh: meshes.add(Capsule3d {
-//                     radius: 0.125,
-//                     half_length: 0.25,
-//                 }),
-//                 material: materials.add(Color::BLUE),
-//                 transform: Transform::from_translation(translation)
-//                     .with_rotation(Quat::from_axis_angle(Vec3::Z, 90.0_f32.to_radians())),
-//                 ..default()
-//             },
-//             RigidBody::Dynamic,
-//             Collider::capsule(0.5, 0.125),
-//             Friction::new(1.0),
-//             chain_layers,
-//             Name::from("Link"),
-//         ))
-//         .id();
-
-//     commands.spawn(
-//         DistanceJoint::new(previous_entity, next_entity)
-//             .with_limits(0.3, 0.5)
-//             .with_local_anchor_1(Vec3::Y * 0.5)
-//             .with_local_anchor_2(Vec3::NEG_Y * 0.5)
-//             .with_compliance(0.0), // .with_linear_velocity_damping(500.0), // .with_rest_length(0.01),
-//     );
-// }
-
-// let chain_last_entity = next_entity;
-
-// next_entity = commands
-//     .spawn((
-//         PbrBundle {
-//             mesh: meshes.add(Cuboid::new(0.5, 2.0, 0.5)),
-//             material: materials.add(Color::GRAY),
-//             transform: Transform::from_translation(segment_translation(chain_iterations)),
-//             ..default()
-//         },
-//         chain_layers,
-//         Name::from("Stake"),
-//         Collider::cuboid(0.5, 2.0, 0.5),
-//         RigidBody::Static,
-//     ))
-//     .id();
-
-// commands.spawn(
-//     DistanceJoint::new(chain_last_entity, next_entity)
-//         .with_local_anchor_1(Vec3::Y)
-//         .with_local_anchor_2(Vec3::Y)
-//         .with_limits(1.0, 2.0)
-//         .with_compliance(0.0), // .with_linear_velocity_damping(500.0), // .with_rest_length(0.01),
-// );
-
-// let chain_layers = CollisionLayers::new(
-//     ColLayer::PlayerWidget,
-//     [ColLayer::Object, ColLayer::Terrain],
-// );
-
-// commands.insert_resource(WireAssets {
-//     stake: asset_server.load("stake.glb#Scene0"),
-//     segment: asset_server.load("segment.glb#Scene0"),
-// });
