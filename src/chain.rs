@@ -40,9 +40,15 @@ impl ChainInfo {
             && !self.locked
     }
 
-    pub fn deploy_segment(&mut self, primary_entity: Entity, final_joint_entity: Entity) {
+    pub fn deploy_segment(
+        &mut self,
+        primary_entity: Entity,
+        final_joint_entity: Entity,
+        distance: f32,
+    ) {
         self.primary_entity = Some(primary_entity);
         self.final_joint_entity = Some(final_joint_entity);
+        self.distance_to_target = distance;
         self.deployed_segments += 1;
     }
 
@@ -174,7 +180,9 @@ fn extend_chain(
                 ))
                 .id();
 
-            chain_info.deploy_segment(new_primary, new_final_joint_entity);
+            let segment_distance = target_transform.translation.distance(spawn_translation);
+
+            chain_info.deploy_segment(new_primary, new_final_joint_entity, segment_distance);
         }
     }
 }
