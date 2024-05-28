@@ -52,10 +52,18 @@ impl ChainInfo {
         self.deployed_segments += 1;
     }
 
-    pub fn deploy_stake(&mut self, final_joint_entity: Entity) {
+    pub fn deploy_stake(
+        &mut self,
+        final_joint_entity: Entity,
+        stake_entity: Entity,
+        target_entity: Entity,
+    ) {
         self.deployed = true;
         self.deployed_segments = 0;
         self.final_joint_entity = Some(final_joint_entity);
+        self.primary_entity = Some(stake_entity);
+        self.stake_entity = Some(stake_entity);
+        self.target_entity = Some(target_entity);
     }
 }
 
@@ -67,20 +75,15 @@ impl Default for ChainInfo {
             deployed_segments: 0,
             max_segments: 10,
             distance_to_target: 0.0,
-            distance_threshold: 0.25,
+            distance_threshold: 1.0,
             rest_length: 1.0,
-            max_distance: 20.0,
+            max_distance: 10.0,
             final_joint_entity: None,
             stake_entity: None,
             primary_entity: None,
             target_entity: None,
         }
     }
-}
-
-#[derive(Resource)]
-pub struct WireAssets {
-    pub stake: Handle<Scene>,
 }
 
 #[derive(Component)]
@@ -125,6 +128,7 @@ fn extend_chain(
     target_query: Query<(Entity, &Transform), (With<ChainTarget>, Without<FinalJoint>)>,
 ) {
     if chain_info.should_extend() {
+        println!("CAN EXTEND");
         if let (
             Ok((primary_entity, primary_transform)),
             Ok((target_entity, target_transform)),
@@ -152,6 +156,7 @@ fn extend_chain(
                             .with_rotation(Quat::from_axis_angle(Vec3::Z, 90.0_f32.to_radians())),
                         ..default()
                     },
+                    ChainPrimary,
                     RigidBody::Dynamic,
                     Collider::capsule(0.5, 0.125),
                     Friction::new(1.0),
@@ -172,7 +177,7 @@ fn extend_chain(
             let new_final_joint_entity = commands
                 .spawn((
                     DistanceJoint::new(new_primary, target_entity)
-                        .with_limits(0.3, 0.5)
+                        .with_limits(0.0, 0.6)
                         .with_local_anchor_1(Vec3::Y * 0.5)
                         .with_local_anchor_2(Vec3::NEG_Y * 0.5)
                         .with_compliance(0.0),
@@ -191,7 +196,8 @@ fn deploy_stake(
     mut commands: Commands,
     input: Res<ButtonInput<KeyCode>>,
     mut chain_info: ResMut<ChainInfo>,
-    wire_assets: Res<WireAssets>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
     query: Query<(Entity, &Transform), With<crate::player::Player>>,
 ) {
     if let Ok((entity, transform)) = query.get_single() {
@@ -200,11 +206,16 @@ fn deploy_stake(
             chain_info.deployed = true;
             let stake_entity = commands
                 .spawn((
-                    SceneBundle {
+                    PbrBundle {
+                        mesh: meshes.add(Cuboid::new(0.5, 2.0, 0.5)),
+                        material: materials.add(Color::PURPLE),
                         transform: stake_transform,
-                        scene: wire_assets.stake.clone(),
                         ..default()
                     },
+                    CollisionLayers::new(
+                        ColLayer::PlayerWidget,
+                        [ColLayer::Terrain, ColLayer::Object],
+                    ),
                     RigidBody::Static,
                     ChainPrimary,
                     Collider::cuboid(0.25, 0.5, 0.25),
@@ -222,8 +233,8 @@ fn deploy_stake(
             let final_joint_entity = commands
                 .spawn((
                     DistanceJoint::new(stake_entity, entity)
-                        .with_limits(0.0, 0.5)
-                        .with_local_anchor_1(Vec3::Y)
+                        .with_limits(0.0, 0.6)
+                        .with_local_anchor_1(Vec3::ZERO)
                         .with_local_anchor_2(Vec3::X * 0.5)
                         .with_compliance(0.001),
                     FinalJoint,
@@ -234,13 +245,13 @@ fn deploy_stake(
             commands.spawn((
                 DistanceJoint::new(stake_entity, entity)
                     .with_limits(0.0, chain_info.max_distance)
-                    .with_local_anchor_1(Vec3::Y)
+                    .with_local_anchor_1(Vec3::ZERO)
                     .with_local_anchor_2(Vec3::X * 0.5)
                     .with_compliance(0.0),
                 TetherJoint,
             ));
 
-            chain_info.deploy_stake(final_joint_entity);
+            chain_info.deploy_stake(final_joint_entity, stake_entity, entity);
         }
     }
 }
