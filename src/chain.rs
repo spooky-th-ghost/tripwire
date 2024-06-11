@@ -1,6 +1,6 @@
 use bevy::prelude::*;
 use bevy_xpbd_3d::prelude::*;
-use victimless_physics::prelude::ColLayer;
+use victimless_bevy::prelude::ColLayer;
 
 pub struct ChainPlugin;
 
@@ -128,7 +128,6 @@ fn extend_chain(
     target_query: Query<(Entity, &Transform), (With<ChainTarget>, Without<FinalJoint>)>,
 ) {
     if chain_info.should_extend() {
-        println!("CAN EXTEND");
         if let (
             Ok((primary_entity, primary_transform)),
             Ok((target_entity, target_transform)),
@@ -180,6 +179,7 @@ fn extend_chain(
                         .with_limits(0.0, 0.6)
                         .with_local_anchor_1(Vec3::Y * 0.5)
                         .with_local_anchor_2(Vec3::NEG_Y * 0.5)
+                        .with_linear_velocity_damping(1.0)
                         .with_compliance(0.0),
                     FinalJoint,
                 ))

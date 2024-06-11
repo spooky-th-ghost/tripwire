@@ -1,6 +1,6 @@
 use bevy::prelude::*;
 use bevy_xpbd_3d::prelude::*;
-use victimless_physics::prelude::*;
+use victimless_bevy::prelude::*;
 
 pub struct PlayerPlugin;
 

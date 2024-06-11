@@ -3,7 +3,7 @@ use bevy_inspector_egui::quick::WorldInspectorPlugin;
 use bevy_xpbd_3d::prelude::*;
 use chain::ChainPlugin;
 use player::PlayerPlugin;
-use victimless_physics::prelude::*;
+use victimless_bevy::prelude::*;
 
 mod chain;
 mod player;

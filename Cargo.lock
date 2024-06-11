@@ -170,6 +170,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "anyhow"
+version = "1.0.86"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b3d1d046238990b9cf5bcde22a3fb3584ee5cf65fb2765f454ed428c7a0063da"
+
+[[package]]
 name = "approx"
 version = "0.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -435,6 +441,31 @@ dependencies = [
 ]
 
 [[package]]
+name = "bevy_asset_loader"
+version = "0.20.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ef5e87388367317b6799ccc408ebc553a2ed45bc4c6c06263d23306b397b55d3"
+dependencies = [
+ "anyhow",
+ "bevy",
+ "bevy_asset_loader_derive",
+ "bevy_common_assets",
+ "path-slash",
+ "serde",
+]
+
+[[package]]
+name = "bevy_asset_loader_derive"
+version = "0.20.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2660d1c142f8122ccbdbfbc2cc93ac4030c24815dcb16823615cb65941fb1fa3"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.66",
+]
+
+[[package]]
 name = "bevy_asset_macros"
 version = "0.13.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -462,6 +493,19 @@ dependencies = [
  "bevy_utils",
  "cpal",
  "rodio",
+]
+
+[[package]]
+name = "bevy_common_assets"
+version = "0.10.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "17516cc66d8c00ea3fdba144d518c20f1a8d8c5a7d14af3642dc2488e4bdb3a6"
+dependencies = [
+ "anyhow",
+ "bevy",
+ "ron",
+ "serde",
+ "thiserror",
 ]
 
 [[package]]
@@ -672,6 +716,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "bevy_gltf_blueprints"
+version = "0.9.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "78a27285bdd0e163aa4ac08875a38a398b7d191b0ce17644604813a439e16a2f"
+dependencies = [
+ "bevy",
+ "bevy_gltf_components",
+]
+
+[[package]]
+name = "bevy_gltf_components"
+version = "0.5.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e7ae31d0e0a111b003f42f44f504ed24153f1341c1989a4e418bdb52da7b6b88"
+dependencies = [
+ "bevy",
+ "ron",
+ "serde",
+]
+
+[[package]]
 name = "bevy_hierarchy"
 version = "0.13.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -847,6 +912,19 @@ dependencies = [
  "quote",
  "syn 2.0.66",
  "uuid",
+]
+
+[[package]]
+name = "bevy_registry_export"
+version = "0.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7c971f8bd4115568455a0f27b4a808d24f600e30d2de7fbc10461d21170058df"
+dependencies = [
+ "bevy",
+ "bevy_app",
+ "bevy_ecs",
+ "bevy_reflect",
+ "serde_json",
 ]
 
 [[package]]
@@ -3167,6 +3245,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "57c0d7b74b563b49d38dae00a0c37d4d6de9b432382b2892f0574ddcae73fd0a"
 
 [[package]]
+name = "path-slash"
+version = "0.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1e91099d4268b0e11973f036e885d652fb0b21fedcf69738c627f94db6a44f42"
+
+[[package]]
 name = "percent-encoding"
 version = "2.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3961,7 +4045,7 @@ dependencies = [
  "bevy",
  "bevy-inspector-egui",
  "bevy_xpbd_3d",
- "victimless-physics",
+ "victimless-bevy",
 ]
 
 [[package]]
@@ -4071,9 +4155,57 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "49874b5167b65d7193b8aba1567f5c7d93d001cafc34600cee003eda787e483f"
 
 [[package]]
-name = "victimless-physics"
+name = "victimless-bevy"
 version = "0.1.0"
-source = "git+https://github.com/victimless-crime-cooperative/victimless-bevy.git#92ac8b7d9f485d783bc701fb92daeb677b1a6af3"
+source = "git+https://github.com/victimless-crime-cooperative/victimless-bevy.git#5cbf5e4a9ee351694cae9a2655ab2335bc9c6f99"
+dependencies = [
+ "victimless_internal",
+]
+
+[[package]]
+name = "victimless_animation"
+version = "0.1.0"
+source = "git+https://github.com/victimless-crime-cooperative/victimless-bevy.git#5cbf5e4a9ee351694cae9a2655ab2335bc9c6f99"
+dependencies = [
+ "bevy",
+]
+
+[[package]]
+name = "victimless_asset"
+version = "0.1.0"
+source = "git+https://github.com/victimless-crime-cooperative/victimless-bevy.git#5cbf5e4a9ee351694cae9a2655ab2335bc9c6f99"
+dependencies = [
+ "bevy",
+ "bevy_asset_loader",
+ "bevy_gltf_blueprints",
+ "bevy_gltf_components",
+ "bevy_registry_export",
+]
+
+[[package]]
+name = "victimless_camera"
+version = "0.1.0"
+source = "git+https://github.com/victimless-crime-cooperative/victimless-bevy.git#5cbf5e4a9ee351694cae9a2655ab2335bc9c6f99"
+dependencies = [
+ "bevy",
+ "bevy_xpbd_3d",
+]
+
+[[package]]
+name = "victimless_internal"
+version = "0.1.0"
+source = "git+https://github.com/victimless-crime-cooperative/victimless-bevy.git#5cbf5e4a9ee351694cae9a2655ab2335bc9c6f99"
+dependencies = [
+ "victimless_animation",
+ "victimless_asset",
+ "victimless_camera",
+ "victimless_physics",
+]
+
+[[package]]
+name = "victimless_physics"
+version = "0.1.0"
+source = "git+https://github.com/victimless-crime-cooperative/victimless-bevy.git#5cbf5e4a9ee351694cae9a2655ab2335bc9c6f99"
 dependencies = [
  "bevy",
  "bevy_xpbd_3d",

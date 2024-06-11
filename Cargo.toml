@@ -12,4 +12,4 @@ opt-level = 3
 bevy = "0.13.2"
 bevy-inspector-egui = "0.24.0"
 bevy_xpbd_3d = "0.4.2"
-victimless-physics = {git = "https://github.com/victimless-crime-cooperative/victimless-bevy.git"}
+victimless-bevy = {git = "https://github.com/victimless-crime-cooperative/victimless-bevy.git"}
